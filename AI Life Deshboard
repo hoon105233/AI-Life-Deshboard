@@ -8,12 +8,17 @@
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- React & ReactDOM CDN -->
+  <!-- React & ReactDOM CDN (안정적인 React 18 버전) -->
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   
-  <!-- Babel CDN (인라인 JSX 컴파일용) -->
+  <!-- Babel CDN (브라우저에서 리액트 코드를 직접 실행할 수 있게 해주는 도구) -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase 핵심 라이브러리 및 서비스 (Compat 버전으로 변경하여 오류 완전 차단) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 
   <style>
     @keyframes spin-slow {
@@ -29,27 +34,8 @@
 
   <div id="root"></div>
 
-  <!-- Firebase 및 React 앱 실행 스크립트 -->
-  <script type="text/babel" data-type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { 
-      getAuth, 
-      signInWithPopup, 
-      GoogleAuthProvider, 
-      signOut, 
-      onAuthStateChanged 
-    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-    import { 
-      getFirestore, 
-      doc, 
-      setDoc, 
-      collection, 
-      onSnapshot, 
-      addDoc, 
-      updateDoc, 
-      deleteDoc 
-    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-
+  <!-- React 앱 실행 스크립트 -->
+  <script type="text/babel">
     // --- Firebase 설정 적용 ---
     const firebaseConfig = {
       apiKey: "AIzaSyBiqM4kB8JxbvfwqFTrDv1X4spp9HZK3LE",
@@ -61,11 +47,13 @@
       measurementId: "G-H39RS9PPYY"
     };
 
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
+    // Firebase 초기화 (Compat 글로벌 네임스페이스 사용)
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+    const db = firebase.firestore();
+    
     const appId = 'life-dashboard-app';
-    const apiKey = ""; // 런타임에서 주입되는 Gemini API Key
+    const apiKey = ""; // 런타임에서 자동으로 주입되는 Gemini API Key
 
     // --- Simple SVG Icons Component ---
     const Icons = {
@@ -157,8 +145,9 @@
         return () => clearInterval(timer);
       }, []);
 
+      // Google 로그인 인증 관찰자 (Compat API 버전)
       useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+        const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
           if (currentUser) {
             setUser(currentUser);
             setAuthError(null);
@@ -174,43 +163,47 @@
         setLoading(true);
         setAuthError(null);
         try {
-          const provider = new GoogleAuthProvider();
-          // 도메인 제한 조건 없이 모든 구글 계정 연동 허용
-          await signInWithPopup(auth, provider);
+          const provider = new firebase.auth.GoogleAuthProvider();
+          await auth.signInWithPopup(provider);
         } catch (error) {
+          console.error(error);
           setAuthError('구글 로그인에 실패했습니다. 다시 시도해 주세요.');
           setLoading(false);
         }
       };
 
       const handleSignOut = async () => {
-        await signOut(auth);
+        await auth.signOut();
         setUser(null);
         setTodos([]);
         setSchedules([]);
         setDdays([]);
       };
 
+      // 실시간 데이터베이스 바인딩 (Compat API 버전)
       useEffect(() => {
         if (!user) return;
 
-        const unsubscribeTodos = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'todos'), (snap) => {
+        const todosRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('todos');
+        const unsubscribeTodos = todosRef.onSnapshot((snap) => {
           const list = [];
           snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
           setTodos(list.sort((a,b) => b.createdAt - a.createdAt));
-        });
+        }, (err) => console.error(err));
 
-        const unsubscribeSchedules = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'schedules'), (snap) => {
+        const schedulesRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('schedules');
+        const unsubscribeSchedules = schedulesRef.onSnapshot((snap) => {
           const list = [];
           snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
           setSchedules(list.sort((a,b) => new Date(a.date) - new Date(b.date)));
-        });
+        }, (err) => console.error(err));
 
-        const unsubscribeDdays = onSnapshot(collection(db, 'artifacts', appId, 'users', user.uid, 'ddays'), (snap) => {
+        const ddaysRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('ddays');
+        const unsubscribeDdays = ddaysRef.onSnapshot((snap) => {
           const list = [];
           snap.forEach(doc => list.push({ id: doc.id, ...doc.data() }));
           setDdays(list.sort((a,b) => new Date(a.date) - new Date(b.date)));
-        });
+        }, (err) => console.error(err));
 
         return () => {
           unsubscribeTodos();
@@ -259,23 +252,42 @@
       const handleAddTodo = async (e) => {
         e.preventDefault();
         if (!newTodo.trim() || !user) return;
-        await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'todos'), {
-          text: newTodo,
-          completed: false,
-          createdAt: Date.now()
-        });
+        
+        await db.collection('artifacts')
+          .doc(appId)
+          .collection('users')
+          .doc(user.uid)
+          .collection('todos')
+          .add({
+            text: newTodo,
+            completed: false,
+            createdAt: Date.now()
+          });
+
         setNewTodo('');
         setActiveModal(null);
       };
 
       const handleToggleTodo = async (id, current) => {
-        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'todos', id), {
-          completed: !current
-        });
+        await db.collection('artifacts')
+          .doc(appId)
+          .collection('users')
+          .doc(user.uid)
+          .collection('todos')
+          .doc(id)
+          .update({
+            completed: !current
+          });
       };
 
       const handleDeleteTodo = async (id) => {
-        await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'todos', id));
+        await db.collection('artifacts')
+          .doc(appId)
+          .collection('users')
+          .doc(user.uid)
+          .collection('todos')
+          .doc(id)
+          .delete();
       };
 
       if (loading) {
@@ -409,7 +421,7 @@
                     onChange={e => setNewTodo(e.target.value)} 
                     placeholder="할 일 내용 입력" 
                     required 
-                    className="w-full border p-3 rounded-xl text-sm"
+                    className="w-full border p-3 rounded-xl text-sm text-slate-800"
                   />
                   <div className="flex space-x-2">
                     <button type="button" onClick={() => setActiveModal(null)} className="flex-1 bg-slate-100 py-2.5 rounded-xl font-bold text-sm">취소</button>
@@ -424,13 +436,8 @@
     }
 
     const container = document.getElementById('root');
-    const root = createRoot ? createRoot(container) : ReactDOM.createRoot(container);
+    const root = ReactDOM.createRoot(container);
     root.render(<App />);
-  </script>
-
-  <!-- React 18 createRoot 호환용 보조 코드 -->
-  <script>
-    const createRoot = ReactDOM.createRoot;
   </script>
 </body>
 </html>
